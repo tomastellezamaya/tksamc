@@ -15,7 +15,7 @@ EO = 8.8541878176e-12
 E_CHARGE = 1.602e-19
 X_CONST = 0.1
 
-def solve_exact(Eij, charges, pkas, pH, T):
+def solve_exact(Eij, charges, pkas, pH, T, return_microstate_energies=False):
     """
     Exact solution for TKSA.
 
@@ -25,9 +25,13 @@ def solve_exact(Eij, charges, pkas, pH, T):
         pkas: pKa values (N).
         pH: pH value.
         T: Temperature.
+        return_microstate_energies: If True, also return exact microstate energies and Boltzmann weights.
 
     Returns:
         Gqq: Free energy per residue (N).
+        If return_microstate_energies is True, also returns:
+            energies: microstate energies (J/mol)
+            weights: normalized Boltzmann weights
     """
     n = len(charges)
     states = (1 << n) - 1  # 2^n - 1
@@ -45,6 +49,12 @@ def solve_exact(Eij, charges, pkas, pH, T):
 
     sum_Zn = 0.0
     sum_Zu = 0.0
+
+    energies = None
+    weights = None
+    if return_microstate_energies:
+        energies = np.zeros(total_states, dtype=np.float64)
+        weights = np.zeros(total_states, dtype=np.float64)
 
     # We need to accumulate Gqq.
     # Since we can't store everything, we accumulate contribution to numerator.
@@ -112,6 +122,10 @@ def solve_exact(Eij, charges, pkas, pH, T):
 
         sum_Zu += np.sum(exp_factor_u)
 
+        if return_microstate_energies:
+            energies[start_idx:end_idx] = Gn
+            weights[start_idx:end_idx] = exp_factor_n
+
         # Accumulate Gqq
         # C code: `GC = (exp( -(Gn)/(R*T)  -  vi*(log(10))*PH))/Zn ;`
         # Wait, C code divides by Zn inside the loop?
@@ -129,6 +143,9 @@ def solve_exact(Eij, charges, pkas, pH, T):
         Gqq_num += np.sum(Interaction_energy_per_res * exp_factor_n[:, None], axis=0)
 
     Gqq = 0.5 * Gqq_num / sum_Zn
+
+    if return_microstate_energies:
+        return Gqq, energies, weights / np.sum(weights)
 
     return Gqq
 
@@ -216,11 +233,12 @@ def _solve_mc_jit(Eij, charges, pkas, pH, T, steps, equil_steps):
             E_total += E_interaction_all
             E_total_sq += E_interaction_all**2
             
-            #calculating the energy of the current microstate and recording it in the sampling distribution
+            # calculating the energy of the current microstate and recording it in the sampling distribution
+            # Use the same sign convention as the exact solver: -pKa contribution + interaction energy.
             term1 = np.dot(pkas, current_charges) * np.log(10) * R * T
             term2 = 0.5 * np.sum(current_charges * np.dot(Eij, current_charges))
-            E_microstate = term1 + term2
-            
+            E_microstate = -term1 + term2
+
             sampling_dist[step - equil_steps] = E_microstate
     count = steps - equil_steps
     avg_E = E_total / count
@@ -261,6 +279,30 @@ def plot_mc_sampling_distribution(sampling_dist, bins=50, density=True, color='C
     plt.xlabel('Microstate energy')
     plt.ylabel('Probability density' if density else 'Count')
     plt.title('MC microstate energy sampling distribution')
+    plt.grid(True)
+    return plt
+
+
+def plot_exact_microstate_distribution(energies, weights=None, bins=50, density=True, color='C1'):
+    """Plot the exact microstate energy distribution.
+
+    Args:
+        energies (array-like): Exact microstate energies (J/mol).
+        weights (array-like or None): Boltzmann weights for each state.
+        bins (int): Number of histogram bins.
+        density (bool): If True, normalize the histogram.
+        color (str): Bar color.
+
+    Returns:
+        matplotlib.pyplot: The pyplot module after plotting.
+    """
+    import matplotlib.pyplot as plt
+
+    plt.figure()
+    plt.hist(energies, bins=bins, weights=weights, density=density, alpha=0.8, color=color)
+    plt.xlabel('Microstate energy')
+    plt.ylabel('Probability density' if density else 'Count')
+    plt.title('Exact microstate energy distribution')
     plt.grid(True)
     return plt
 

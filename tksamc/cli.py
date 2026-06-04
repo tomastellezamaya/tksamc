@@ -342,12 +342,20 @@ def main():
 
    # Solving
    plot_data = []
+   sampling_dist = None
 
    if arguments.arg_s == 'EX':
        print(u"\U0001F63A", "### TK - Exact ###", u"\U0001F63A")
        start = time.time()
 
-       Gqq_result = solver.solve_exact(E, Q, Pk, pH, T)
+       exact_distribution = arguments.arg_plot == 'yes'
+       if exact_distribution:
+           Gqq_result, exact_energies, exact_weights = solver.solve_exact(
+               E, Q, Pk, pH, T, return_microstate_energies=True)
+       else:
+           Gqq_result = solver.solve_exact(E, Q, Pk, pH, T)
+           exact_energies = None
+           exact_weights = None
 
        # Convert to kJ/mol? C code did: Gqq[b]/1000.0
        # My solve_exact returns Energy in Joules/mol (because terms are in RT).
@@ -369,7 +377,7 @@ def main():
        print(u"\U0001F63A", "### TKSA - MC ###", u"\U0001F63A")
        start = time.time()
 
-       G_result = solver.solve_mc(E, Q, Pk, pH, T)
+       G_result, sampling_dist = solver.solve_mc(E, Q, Pk, pH, T)
 
        plot_data = G_result # Already formatted by solve_mc to match C output logic
 
@@ -436,6 +444,22 @@ def main():
        fig_filename = 'Fig_'+arguments.arg_s+'_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'.jpg'
        fig.savefig(fig_filename, dpi=300)
        # plt.show() # Can't show in headless env
+
+       if arguments.arg_s == 'MC' and sampling_dist is not None:
+           sampling_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_sampling_dist.jpg'
+           sampling_plt = solver.plot_mc_sampling_distribution(sampling_dist, bins=50, density=True, color='C0')
+           sampling_plt.tight_layout()
+           sampling_plt.savefig(sampling_fig_filename, dpi=300)
+           sampling_plt.close()
+           print('Saved sampling distribution plot:', sampling_fig_filename)
+
+       if arguments.arg_s == 'EX' and exact_energies is not None:
+           exact_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_microstate_dist.jpg'
+           exact_plt = solver.plot_exact_microstate_distribution(exact_energies, weights=exact_weights, bins=50, density=True, color='C1')
+           exact_plt.tight_layout()
+           exact_plt.savefig(exact_fig_filename, dpi=300)
+           exact_plt.close()
+           print('Saved exact microstate energy plot:', exact_fig_filename)
 
        # Save Output CSV
        # We need to construct S with added column
