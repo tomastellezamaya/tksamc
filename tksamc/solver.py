@@ -230,8 +230,37 @@ def _solve_mc_jit(Eij, charges, pkas, pH, T, steps, equil_steps):
 def solve_mc(Eij, charges, pkas, pH, T, steps=100000, equil_steps=1000):
     """
     Monte Carlo solution wrapper.
+
+    Returns:
+        tuple: (G_res, sampling_dist)
+            G_res: Estimated residue energies.
+            sampling_dist: Array of sampled microstate energies after equilibration.
     """
     convert = 0.0083145 * T
-    avg_E = _solve_mc_jit(Eij, charges, pkas, pH, T, steps, equil_steps)
+    avg_E, sampling_dist = _solve_mc_jit(Eij, charges, pkas, pH, T, steps, equil_steps)
     G_res = avg_E * convert / 5.0
-    return G_res
+    return G_res, sampling_dist
+
+
+def plot_mc_sampling_distribution(sampling_dist, bins=50, density=True, color='C0'):
+    """Plot the MC microstate energy sampling distribution.
+
+    Args:
+        sampling_dist (array-like): Sampled microstate energies from the MC solver.
+        bins (int): Number of histogram bins.
+        density (bool): If True, plot density instead of counts.
+        color (str): Bar color.
+
+    Returns:
+        matplotlib.pyplot: The pyplot module after plotting.
+    """
+    import matplotlib.pyplot as plt
+
+    plt.figure()
+    plt.hist(sampling_dist, bins=bins, density=density, alpha=0.8, color=color)
+    plt.xlabel('Microstate energy')
+    plt.ylabel('Probability density' if density else 'Count')
+    plt.title('MC microstate energy sampling distribution')
+    plt.grid(True)
+    return plt
+
