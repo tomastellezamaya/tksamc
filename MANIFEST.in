@@ -1,3 +1,4 @@
-include README.md
+include README.rst
 include LICENSE
 include README_output.txt
+recursive-include notebooks *.ipynb

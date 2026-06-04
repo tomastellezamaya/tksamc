@@ -80,6 +80,20 @@ This will make the ``tksamc`` command available in your terminal.
 Usage
 =====
 
+Jupyter Notebook Tutorial
+-------------------------
+
+A step-by-step notebook tutorial is available at ``notebooks/tksamc_tutorial.ipynb``.
+It shows how to run the sample PDB file, inspect the CSV and plot outputs, sweep pH
+values, and call the solver functions directly for code experiments.
+
+To open it from a cloned repository:
+
+.. code-block:: bash
+
+    pip install notebook
+    jupyter notebook notebooks/tksamc_tutorial.ipynb
+
 Method 1: Installed Package
 ---------------------------
 

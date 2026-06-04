@@ -456,8 +456,8 @@ def main():
                f.write(line + '\n')
 
    # Cleanup
-   # Move files to aux?
-   # cmd2 = 'mv result.txt *.exe E.dat out.dat SASA* '+os.path.splitext(arguments.f.name)[0]+'*.txt ./aux'
+   # Move files to assets?
+   # cmd2 = 'mv result.txt *.exe E.dat out.dat SASA* '+os.path.splitext(arguments.f.name)[0]+'*.txt ./assets'
    # We are not generating .exe or result.txt.
    # We generated E.dat.
    # We generated Output_... .dat and Fig_... .jpg.

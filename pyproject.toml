@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tksamc"
 version = "1.0.1"
 description = "TKSA - Electrostatic Free Energy calculation for each ionizable residue"
-readme = "README.md"
+readme = "README.rst"
 authors = [
   { name = "Vinícius G. Contessoto" },
 ]
