@@ -150,6 +150,7 @@ def _solve_mc_jit(Eij, charges, pkas, pH, T, steps, equil_steps):
     LN10 = np.log(10.0)
 
     descorrela = 200
+    sampling_dist = np.zeros(steps - equil_steps, dtype=np.float64)
 
     for step in range(steps):
         for _ in range(descorrela):
@@ -214,11 +215,17 @@ def _solve_mc_jit(Eij, charges, pkas, pH, T, steps, equil_steps):
 
             E_total += E_interaction_all
             E_total_sq += E_interaction_all**2
-
+            
+            #calculating the energy of the current microstate and recording it in the sampling distribution
+            term1 = np.dot(pkas, current_charges) * np.log(10) * R * T
+            term2 = 0.5 * np.sum(current_charges * np.dot(Eij, current_charges))
+            E_microstate = term1 + term2
+            
+            sampling_dist[step - equil_steps] = E_microstate
     count = steps - equil_steps
     avg_E = E_total / count
 
-    return avg_E
+    return (avg_E, sampling_dist)
 
 def solve_mc(Eij, charges, pkas, pH, T, steps=100000, equil_steps=1000):
     """
