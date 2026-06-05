@@ -283,7 +283,7 @@ def plot_mc_sampling_distribution(sampling_dist, bins=50, density=True, color='C
     return plt
 
 
-def plot_exact_microstate_distribution(energies, weights=None, bins=50, density=True, color='C1'):
+def plot_exact_microstate_distribution(energies, weights=None, bins=200, density=True, color='C1'):
     """Plot the exact microstate energy distribution.
 
     Args:
@@ -304,5 +304,92 @@ def plot_exact_microstate_distribution(energies, weights=None, bins=50, density=
     plt.ylabel('Probability density' if density else 'Count')
     plt.title('Exact microstate energy distribution')
     plt.grid(True)
+    return plt
+
+
+def compare_exact_mc(Eij, charges, pkas, pH, T, mc_steps=100000, mc_equil=1000):
+    """Compare Exact vs Monte Carlo per-residue energies.
+
+    Calls the exact solver and the MC solver and returns per-residue values,
+    differences and summary statistics.
+
+    Returns a dict with keys:
+        ex_vals_kj: Exact per-residue values (kJ/mol)
+        mc_vals_kj: MC per-residue values (kJ/mol)
+        diffs: mc - ex (kJ/mol)
+        rmse: root-mean-square error across residues
+        mean_diff: mean difference
+        max_abs_diff: maximum absolute difference
+        sampling_dist: MC sampled microstate energies
+        exact_energies: exact microstate energies
+        exact_weights: exact Boltzmann weights
+    """
+    # Exact values (returns J/mol) -> convert to kJ/mol for plotting consistency
+    ex_vals, exact_energies, exact_weights = solve_exact(Eij, charges, pkas, pH, T, return_microstate_energies=True)
+    ex_vals_kj = ex_vals / 1000.0
+
+    # Monte Carlo values (solve_mc returns values compatible with CLI plotting)
+    mc_vals_kj, sampling_dist = solve_mc(Eij, charges, pkas, pH, T, steps=mc_steps, equil_steps=mc_equil)
+
+    # Ensure arrays
+    ex_vals_kj = np.asarray(ex_vals_kj, dtype=np.float64)
+    mc_vals_kj = np.asarray(mc_vals_kj, dtype=np.float64)
+
+    # Align lengths (they should match)
+    n = min(len(ex_vals_kj), len(mc_vals_kj))
+    ex_vals_kj = ex_vals_kj[:n]
+    mc_vals_kj = mc_vals_kj[:n]
+
+    diffs = mc_vals_kj - ex_vals_kj
+
+    rmse = np.sqrt(np.mean(diffs**2))
+    mean_diff = np.mean(diffs)
+    max_abs_diff = np.max(np.abs(diffs))
+
+    return {
+        'ex_vals_kj': ex_vals_kj,
+        'mc_vals_kj': mc_vals_kj,
+        'diffs': diffs,
+        'rmse': rmse,
+        'mean_diff': mean_diff,
+        'max_abs_diff': max_abs_diff,
+        'sampling_dist': sampling_dist,
+        'exact_energies': exact_energies,
+        'exact_weights': exact_weights
+    }
+
+
+def plot_compare_residues(ex_vals_kj, mc_vals_kj, bins=30):
+    """Create comparison plots: bar chart EX vs MC per residue and histogram of differences.
+
+    Returns the pyplot module after plotting both figures (first is bar chart, second is histogram).
+    """
+    import matplotlib.pyplot as plt
+
+    ex_vals_kj = np.asarray(ex_vals_kj)
+    mc_vals_kj = np.asarray(mc_vals_kj)
+    n = len(ex_vals_kj)
+
+    # Bar chart
+    plt.figure(figsize=(10, 6))
+    x = np.arange(n)
+    width = 0.4
+    plt.bar(x - width/2, ex_vals_kj, width=width, label='Exact', color='C1', alpha=0.8)
+    plt.bar(x + width/2, mc_vals_kj, width=width, label='MC', color='C0', alpha=0.8)
+    plt.xlabel('Residue Index')
+    plt.ylabel(r'$\\Delta G_{qq}$ (kJ/mol)')
+    plt.title('Exact vs MC per-residue ΔG')
+    plt.legend()
+    plt.grid(True)
+
+    # Histogram of differences
+    plt.figure(figsize=(8, 4))
+    diffs = mc_vals_kj - ex_vals_kj
+    plt.hist(diffs, bins=bins, color='C3', alpha=0.9)
+    plt.xlabel('MC - Exact (kJ/mol)')
+    plt.ylabel('Count')
+    plt.title('Distribution of per-residue differences (MC - Exact)')
+    plt.grid(True)
+
     return plt
 

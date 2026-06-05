@@ -75,6 +75,7 @@ def main():
    parser.add_argument('-s', action='store',choices=['EX','MC'], default="MC",dest='arg_s',type=str,help='Statistical method to protonation state amostration - EX = Exact; MC = Monte Carlo;')
    parser.add_argument('-plot', action='store',choices=['yes','no'], default="yes",dest='arg_plot',type=str,help='Save Plot figure file - EPS')
    parser.add_argument('-aref', action='store', choices=['header', 'mdtraj'], default='header', dest='arg_aref', type=str, help='Reference Max SASA set. header=Legacy (Richards), mdtraj=Bondi (Tien 2013). Default: header')
+   parser.add_argument('-compare', action='store', choices=['yes','no'], default='no', dest='arg_compare', type=str, help='Compare MC sampling vs Exact solver and produce comparison plots/CSV. Default: no')
 
    try:
        arguments = parser.parse_args()
@@ -452,6 +453,35 @@ def main():
            sampling_plt.savefig(sampling_fig_filename, dpi=300)
            sampling_plt.close()
            print('Saved sampling distribution plot:', sampling_fig_filename)
+
+       # Optional comparison: Exact vs MC
+       if arguments.arg_compare == 'yes':
+           try:
+               print('Running Exact vs MC comparison...')
+               comp = solver.compare_exact_mc(E, Q, Pk, pH, T)
+
+               compare_fig = solver.plot_compare_residues(comp['ex_vals_kj'], comp['mc_vals_kj'])
+               compare_fig_filename = 'Fig_COMPARE_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'.jpg'
+               compare_fig.tight_layout()
+               compare_fig.savefig(compare_fig_filename, dpi=300)
+               compare_fig.close()
+               print('Saved comparison plot:', compare_fig_filename)
+
+               # Save comparison CSV
+               compare_out = 'Output_COMPARE_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'.csv'
+               with open(compare_out, 'w') as cf:
+                   cf.write('# Name,Residue-index,Atom-Index,Exact_kJ_per_res,MC_kJ_per_res,MC_minus_Exact_kJ\n')
+                   for idx, row in enumerate(S):
+                       name = row[0]
+                       res_index = row[1]
+                       atom_index = row[3]
+                       exv = comp['ex_vals_kj'][idx] if idx < len(comp['ex_vals_kj']) else ''
+                       mcv = comp['mc_vals_kj'][idx] if idx < len(comp['mc_vals_kj']) else ''
+                       diffv = comp['diffs'][idx] if idx < len(comp['diffs']) else ''
+                       cf.write(','.join(map(str, [name, res_index, atom_index, exv, mcv, diffv])) + '\n')
+               print('Saved comparison CSV:', compare_out)
+           except Exception as e:
+               print('Comparison failed:', e)
 
        if arguments.arg_s == 'EX' and exact_energies is not None:
            exact_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_microstate_dist.jpg'
