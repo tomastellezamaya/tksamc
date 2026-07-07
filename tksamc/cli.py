@@ -41,6 +41,7 @@ from . import solver
 import math
 from scipy.special import eval_legendre
 
+
 # Constants
 All_residues = ['ALA','CYS','ASP','GLU','PHE','GLY','HIS','ILE','LYS','LEU','MET','ASN','PRO','GLN','ARG','SER','THR','VAL','TRP','TYR']
 # Reference values for Max SASA (Header / Legacy)
@@ -72,11 +73,13 @@ def main():
    parser.add_argument('-T', action='store', default=300.0, dest='arg_T',  help='Temperature value')
    parser.add_argument('-f', metavar='input-file-PDB',help='insert a PDB file',type=argparse.FileType('rt'))
    parser.add_argument('-e', action='store',choices=['TK'], default="TK",dest='arg_e',type=str,help='Electrostatic energy calculation method')
-   parser.add_argument('-s', action='store',choices=['EX','MC'], default="MC",dest='arg_s',type=str,help='Statistical method to protonation state amostration - EX = Exact; MC = Monte Carlo;')
+   parser.add_argument('-s', action='store',choices=['EX','MC','QA','COMPARE'], default="MC",dest='arg_s',type=str,help='Statistical method - EX = Exact; MC = Monte Carlo; COMPARE = run both and compare the differences for testing')
+   parser.add_argument('-u', action = 'store', choices = ['yes','no'], default = 'yes', dest = 'arg_by_weight', type = str, help = 'force QA to sample unique states')
    parser.add_argument('-plot', action='store',choices=['yes','no'], default="yes",dest='arg_plot',type=str,help='Save Plot figure file - EPS')
    parser.add_argument('-aref', action='store', choices=['header', 'mdtraj'], default='header', dest='arg_aref', type=str, help='Reference Max SASA set. header=Legacy (Richards), mdtraj=Bondi (Tien 2013). Default: header')
-   parser.add_argument('-compare', action='store', choices=['yes','no'], default='no', dest='arg_compare', type=str, help='Compare MC sampling vs Exact solver and produce comparison plots/CSV. Default: no')
-
+   parser.add_argument('-exact-states-file', action='store', type=str, default=None, dest='arg_exact_states_file', help='Path to save exact microstates (CSV format). Default: None')
+   parser.add_argument('-run-error-limit', action='store', choices=['yes','no'], default='no', dest='arg_run_error_limit', type=str, help='Run error limit analysis for exact microstates and save results. Default: no')
+   parser.add_argument('-graph-microstates', action = 'store', choices=['yes','no'], default='no', dest='arg_graph_microstates', type=str, help='Graph microstate energy distribution for Exact solver. Default: no')
    try:
        arguments = parser.parse_args()
    except IOError as msg:
@@ -91,6 +94,10 @@ def main():
    print('Statistical Method =', arguments.arg_s)
    print('Plot =', arguments.arg_plot)
 
+   if arguments.arg_run_error_limit == 'yes':
+       print('Running error limit analysis for exact microstates.')
+   if arguments.arg_graph_microstates == 'yes':
+       print('Graphing microstate energy distribution.')
    file_pdb_name = arguments.f.name
    pH = np.float64(arguments.arg_pH)
    T = np.float64(arguments.arg_T)
@@ -349,14 +356,43 @@ def main():
        print(u"\U0001F63A", "### TK - Exact ###", u"\U0001F63A")
        start = time.time()
 
-       exact_distribution = arguments.arg_plot == 'yes'
-       if exact_distribution:
-           Gqq_result, exact_energies, exact_weights = solver.solve_exact(
+       if arguments.arg_plot == 'yes':
+           Gqq_result, energies, weights, per_residue_energy = solver.solve_exact(
                E, Q, Pk, pH, T, return_microstate_energies=True)
+          
+           if arguments.arg_run_error_limit == 'yes':
+              print("Running error limit analysis for exact microstates...")
+              if arguments.arg_by_weight == 'yes':
+                _, _, sorted_weights, sorted_per_residue_energy = solver.sort_by_weight(
+                 energies, weights, per_residue_energy)
+              else:
+                _, _, sorted_weights, sorted_per_residue_energy = solver.sort_by_energy(
+                 energies, weights, per_residue_energy)
+
+              error_limit_results = solver.error_limit_exact_microstates(
+                    Gqq_full=Gqq_result, 
+                    sorted_weights=sorted_weights, 
+                    sorted_per_residue_energy=sorted_per_residue_energy,
+                    rate=0.01)
+              dest = "microstate data outputs"
+              exact_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'error_limit.jpg'
+              full_path = os.path.join(dest, exact_fig_filename)
+              error_plot = solver.plot_error_limit_results(error_limit_results)
+              error_plot.savefig(full_path, dpi=300, bbox_inches="tight")
+              error_plot.close()
+              
+           if arguments.arg_graph_microstates == 'yes':
+               dest = "microstate data outputs"
+               exact_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_energies vs weights.jpg'
+               full_path = os.path.join(dest, exact_fig_filename)
+               energy_weight_fig = solver.plot_energy_vs_weights(energies, weights)
+               energy_weight_fig.savefig(full_path, dpi=300, bbox_inches="tight")
+               energy_weight_fig.close()
+               print('Saved exact microstate energy data:', full_path)
        else:
            Gqq_result = solver.solve_exact(E, Q, Pk, pH, T)
-           exact_energies = None
-           exact_weights = None
+           energies = None
+           weights = None
 
        # Convert to kJ/mol? C code did: Gqq[b]/1000.0
        # My solve_exact returns Energy in Joules/mol (because terms are in RT).
@@ -377,28 +413,76 @@ def main():
    elif arguments.arg_s == 'MC':
        print(u"\U0001F63A", "### TKSA - MC ###", u"\U0001F63A")
        start = time.time()
-
-       G_result, sampling_dist = solver.solve_mc(E, Q, Pk, pH, T)
-
-       plot_data = G_result # Already formatted by solve_mc to match C output logic
-
+       G_result, sampling_dist = solver.solve_mc_by_weights(E, Q, Pk, pH, T)
        end = time.time()
        elapsed = end - start
        print("Ran in %f sec" % elapsed)
+       if arguments.arg_graph_microstates == 'yes':
+           dest = "microstate data outputs"
+           sampling_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_sampling_dist.jpg'
+           full_path = os.path.join(dest, sampling_fig_filename)
+           sampling_plt = solver.plot_microstate_counts(sampling_dist, bins=150, color='C0')
+           sampling_plt.savefig(full_path, dpi=300, bbox_inches="tight")
+           sampling_plt.close()
+           print('Saved sampling distribution plot:', full_path)
+       plot_data = G_result
+   elif arguments.arg_s == 'QA':
+       print(u"\U0001F63A", "### TK - QA ###", u"\U0001F63A")
+       start = time.time()
+       if arguments.arg_u == 'yes':
+           Gqq_result, sampling_dist = solver.solve_qa_unique(E, Q, Pk, pH, T)
+       else: 
+           Gqq_result, sampling_dist = solver.solve_qa(E, Q, Pk, pH, T)
+       plot_data = Gqq_result
+       end = time.time()
+       elapsed = end - start
+       print("Ran in %f sec" % elapsed)
+
+       if arguments.arg_graph_microstates == 'yes':
+          dest = "microstate data outputs"
+          sampling_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_sampling_dist.jpg'
+          full_path = os.path.join(dest, sampling_fig_filename)
+          sampling_plt = solver.plot_microstate_counts(sampling_dist, bins=150, color='C0')
+          sampling_plt.savefig(full_path, dpi=300, bbox_inches="tight")
+          sampling_plt.close()
+          print('Saved sampling distribution plot:', full_path)
+          
+   elif arguments.arg_s == 'COMPARE':
+       EX_result, energies, weights, per_residue_energy = solver.solve_exact(
+               E, Q, Pk, pH, T, return_microstate_energies=True)
+       label_1 = "EX model"
+
+       QA_result, mc_sampling_dist = solver.solve_qa(E, Q, Pk, pH, T)
+       label_2 = "QA model"
+    
+       QA_U_result, qa_energies, qa_weights, sampled_microstates = solver.solve_qa_unique(E, Q, Pk, pH, T, samples=100)
+       label_3 = "QA unique model"
+       
+       if arguments.arg_graph_microstates == 'yes':
+           """
+           microstate_compare = solver.plot_exact_vs_mc_sampling(energies, weights, mc_sampling_dist, label_2, figsize=(14, 5), bins=100, color = 'tab:green')
+           dest = "microstate data outputs"
+           sampling_fig_filename = 'Fig_COMPARE_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T) + '_QA_vs_EX.jpg'
+           full_path = os.path.join(dest, sampling_fig_filename)
+           microstate_compare.savefig(full_path, dpi=300, bbox_inches='tight')
+           microstate_compare.close()"""
+           
+           microstate_compare = solver.plot_exact_vs_qa_unique(energies, weights, qa_energies, qa_weights)
+           dest = "microstate data outputs"
+           sampling_fig_filename = 'Fig_COMPARE_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T) + '_QA_Unique_vs_EX.jpg'
+           full_path = os.path.join(dest, sampling_fig_filename)
+           microstate_compare.savefig(full_path, dpi=300, bbox_inches='tight')
+           microstate_compare.close()
+           int_microstates = sampled_microstates.astype(int)
+           np.savetxt('sampled_microstates.csv', int_microstates, delimiter=',')
+       plot_data = EX_result
+       plot_data_2 = QA_result
+       plot_data_3 = QA_U_result
 
    # Plotting / Saving Results
    if arguments.arg_plot == 'yes':
        # Prepare data
        S_arr = np.array(S, dtype=object)
-
-       # Add result to S
-       # S has 11 columns currently.
-       # We append plot_data (dG) to it.
-       # plot_data is 1D array of size N.
-
-       # Format residue names for plot
-       # Restype is already single letter.
-       # "Name+Index"
 
        # X-axis labels
        labels = []
@@ -409,11 +493,7 @@ def main():
        total_dG = np.sum(plot_data)
        print("Total dG Energy: ", total_dG)
 
-       # Plot
-       x_pos = np.arange(len(plot_data))
-       fig = plt.figure(figsize=(10, 6)) # Improved size
-       ax = fig.add_subplot(111)
-       width=1.0
+       # Color logic (SA is shared, applied to all models)
        colors = []
        for position, value in enumerate(plot_data):
            if value > 0 and SA[position] > 0.5:
@@ -421,89 +501,93 @@ def main():
            else:
                colors.append('blue')
 
-       # Improved bar aesthetics
-       ax.bar(x_pos, plot_data, width=width, color=colors, edgecolor='black', linewidth=0.5)
+       x_pos = np.arange(len(plot_data))
+       fontsize = 8 if len(plot_data) > 35 else 12
 
+       if arguments.arg_s == 'COMPARE':
+           # --- Side-by-side comparison plot (3 models) ---
+           total_dG_2 = np.sum(plot_data_2)
+           total_dG_3 = np.sum(plot_data_3)
+           print("Total dG Energy of "+label_2+": ", total_dG_2)
+           print("Total dG Energy of "+label_3+": ", total_dG_3)
+
+           colors_2 = []
+           for position, value in enumerate(plot_data_2):
+               if value > 0 and SA[position] > 0.5:
+                   colors_2.append('red')
+               else:
+                   colors_2.append('blue')
+
+           colors_3 = []
+           for position, value in enumerate(plot_data_3):
+               if value > 0 and SA[position] > 0.5:
+                   colors_3.append('red')
+               else:
+                   colors_3.append('blue')
+
+           bar_width = 0.27
+           fig = plt.figure(figsize=(14, 6))
+           ax = fig.add_subplot(111)
+
+           ax.bar(x_pos - bar_width, plot_data, width=bar_width,
+                  color=colors, edgecolor='black', linewidth=0.5,
+                  label=label_1, alpha=0.85)
+           ax.bar(x_pos, plot_data_2, width=bar_width,
+                  color=colors_2, edgecolor='black', linewidth=0.5,
+                  label=label_2, alpha=0.85, hatch='//')
+           ax.bar(x_pos + bar_width, plot_data_3, width=bar_width,
+                  color=colors_3, edgecolor='black', linewidth=0.5,
+                  label=label_3, alpha=0.85, hatch='xx')
+
+           ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+
+           from matplotlib.patches import Patch
+           legend_elements = [
+               Patch(facecolor='gray', alpha=0.85, label=label_1),
+               Patch(facecolor='gray', alpha=0.85, hatch='//', label=label_2),
+               Patch(facecolor='gray', alpha=0.85, hatch='xx', label=label_3),
+           ]
+           ax.legend(handles=legend_elements, fontsize=10, loc='best')
+
+           plt.title(f'Electrostatic Free Energy per Residue — Model Comparison\n{os.path.basename(file_pdb_name)}', fontsize=14)
+           
+           error_1 = np.linalg.norm(plot_data - plot_data_2)
+           error_2 = np.linalg.norm(plot_data - plot_data_3)
+           print("Error between "+label_1+" and "+label_2+":", error_1)
+           print("Error between "+label_1+" and "+label_3+":", error_2)
+       else:
+           # --- Original single-model plot ---
+           bar_width = 1.0
+           fig = plt.figure(figsize=(10, 6))
+           ax = fig.add_subplot(111)
+
+           ax.bar(x_pos, plot_data, width=bar_width,
+                  color=colors, edgecolor='black', linewidth=0.5)
+
+           plt.title(f'Electrostatic Free Energy per Residue\n{os.path.basename(file_pdb_name)}', fontsize=14)
+
+       # Shared axes formatting
        ax.tick_params('both', length=5, width=2, which='major', labelsize=12)
        plt.setp(ax.spines.values(), linewidth=1.5)
-
-       # Adjust x-ticks based on size
-       fontsize = 12
-       if len(plot_data) > 35:
-           fontsize = 8
-
-       # Labels and Title
        plt.xlabel('Residue', fontsize=14)
        plt.ylabel(r'$\Delta G_{qq}$ (kJ/mol)', fontsize=14)
-       plt.title(f'Electrostatic Free Energy per Residue\n{os.path.basename(file_pdb_name)}', fontsize=14)
-
        plt.xticks(x_pos, labels, rotation=90, fontsize=fontsize)
-       plt.xlim([-0.5, len(x_pos)-0.5])
-
+       plt.xlim([-0.5, len(x_pos) - 0.5])
        plt.tight_layout()
 
        fig_filename = 'Fig_'+arguments.arg_s+'_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'.jpg'
        fig.savefig(fig_filename, dpi=300)
-       # plt.show() # Can't show in headless env
-
-       if arguments.arg_s == 'MC' and sampling_dist is not None:
-           sampling_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_sampling_dist.jpg'
-           sampling_plt = solver.plot_mc_sampling_distribution(sampling_dist, bins=50, density=True, color='C0')
-           sampling_plt.tight_layout()
-           sampling_plt.savefig(sampling_fig_filename, dpi=300)
-           sampling_plt.close()
-           print('Saved sampling distribution plot:', sampling_fig_filename)
-
-       # Optional comparison: Exact vs MC
-       if arguments.arg_compare == 'yes':
-           try:
-               print('Running Exact vs MC comparison...')
-               comp = solver.compare_exact_mc(E, Q, Pk, pH, T)
-
-               compare_fig = solver.plot_compare_residues(comp['ex_vals_kj'], comp['mc_vals_kj'])
-               compare_fig_filename = 'Fig_COMPARE_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'.jpg'
-               compare_fig.tight_layout()
-               compare_fig.savefig(compare_fig_filename, dpi=300)
-               compare_fig.close()
-               print('Saved comparison plot:', compare_fig_filename)
-
-               # Save comparison CSV
-               compare_out = 'Output_COMPARE_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'.csv'
-               with open(compare_out, 'w') as cf:
-                   cf.write('# Name,Residue-index,Atom-Index,Exact_kJ_per_res,MC_kJ_per_res,MC_minus_Exact_kJ\n')
-                   for idx, row in enumerate(S):
-                       name = row[0]
-                       res_index = row[1]
-                       atom_index = row[3]
-                       exv = comp['ex_vals_kj'][idx] if idx < len(comp['ex_vals_kj']) else ''
-                       mcv = comp['mc_vals_kj'][idx] if idx < len(comp['mc_vals_kj']) else ''
-                       diffv = comp['diffs'][idx] if idx < len(comp['diffs']) else ''
-                       cf.write(','.join(map(str, [name, res_index, atom_index, exv, mcv, diffv])) + '\n')
-               print('Saved comparison CSV:', compare_out)
-           except Exception as e:
-               print('Comparison failed:', e)
-
-       if arguments.arg_s == 'EX' and exact_energies is not None:
-           exact_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_microstate_dist.jpg'
-           exact_plt = solver.plot_exact_microstate_distribution(exact_energies, weights=exact_weights, bins=50, density=True, color='C1')
-           exact_plt.tight_layout()
-           exact_plt.savefig(exact_fig_filename, dpi=300)
-           exact_plt.close()
-           print('Saved exact microstate energy plot:', exact_fig_filename)
 
        # Save Output CSV
-       # We need to construct S with added column
-
-       # S is list of lists.
+       dest = "protein data outputs"
        for i in range(len(S)):
            S[i].append(plot_data[i])
 
-       # Updated header with commas
        header='1-Name,2-Residue-index,3-Position,4-Atom-Index,5-Atom-type,6-X,7-Y,8-Z,9-PKA,10-SASA,11-Charge,12-dG_Energy,13-Total_dG='+str(total_dG)+''
-
+       
        out_filename = 'Output_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'.csv'
-
-       with open(out_filename, 'w') as f:
+       full_path = os.path.join(dest, out_filename)
+       with open(full_path, 'w') as f:
            f.write('# ' + header + '\n')
            for row in S:
                line = ",".join(map(str, row))
