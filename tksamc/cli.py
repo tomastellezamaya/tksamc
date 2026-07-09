@@ -74,7 +74,6 @@ def main():
    parser.add_argument('-f', metavar='input-file-PDB',help='insert a PDB file',type=argparse.FileType('rt'))
    parser.add_argument('-e', action='store',choices=['TK'], default="TK",dest='arg_e',type=str,help='Electrostatic energy calculation method')
    parser.add_argument('-s', action='store',choices=['EX','MC','QA','COMPARE'], default="MC",dest='arg_s',type=str,help='Statistical method - EX = Exact; MC = Monte Carlo; COMPARE = run both and compare the differences for testing')
-   parser.add_argument('-u', action = 'store', choices = ['yes','no'], default = 'yes', dest = 'arg_by_weight', type = str, help = 'force QA to sample unique states')
    parser.add_argument('-plot', action='store',choices=['yes','no'], default="yes",dest='arg_plot',type=str,help='Save Plot figure file - EPS')
    parser.add_argument('-aref', action='store', choices=['header', 'mdtraj'], default='header', dest='arg_aref', type=str, help='Reference Max SASA set. header=Legacy (Richards), mdtraj=Bondi (Tien 2013). Default: header')
    parser.add_argument('-exact-states-file', action='store', type=str, default=None, dest='arg_exact_states_file', help='Path to save exact microstates (CSV format). Default: None')
@@ -429,10 +428,7 @@ def main():
    elif arguments.arg_s == 'QA':
        print(u"\U0001F63A", "### TK - QA ###", u"\U0001F63A")
        start = time.time()
-       if arguments.arg_u == 'yes':
-           Gqq_result, sampling_dist = solver.solve_qa_unique(E, Q, Pk, pH, T)
-       else: 
-           Gqq_result, sampling_dist = solver.solve_qa(E, Q, Pk, pH, T)
+       Gqq_result, sampling_dist = solver.solve_qa(E, Q, Pk, pH, T)
        plot_data = Gqq_result
        end = time.time()
        elapsed = end - start
@@ -448,26 +444,41 @@ def main():
           print('Saved sampling distribution plot:', full_path)
           
    elif arguments.arg_s == 'COMPARE':
+       start = time.time()
        EX_result, energies, weights, per_residue_energy = solver.solve_exact(
                E, Q, Pk, pH, T, return_microstate_energies=True)
+       end = time.time()
+       elapsed = end-start     
        label_1 = "EX model"
+       print(f"{label_1} took {elapsed} seconds")
+       if 0.0 in energies:
+           count = np.count_nonzero(energies == 0.0)
+           print(f"Warning: {count} exact 0.0 energy states found")
 
-       QA_result, mc_sampling_dist = solver.solve_qa(E, Q, Pk, pH, T)
-       label_2 = "QA model"
-    
-       QA_U_result, qa_energies, qa_weights, sampled_microstates = solver.solve_qa_unique(E, Q, Pk, pH, T, samples=100)
-       label_3 = "QA unique model"
+       start = time.time()
+       MC_result, mc_sampling_dist = solver.solve_mc_by_weights(E, Q, Pk, pH, T)
+       end = time.time()
+       elapsed = end-start
+       label_2 = "MC model"
+       print(f"{label_2} took {elapsed} seconds")
+
+       start = time.time()
+       QA_U_result, qa_energies, qa_weights, sampled_microstates = solver.solve_qa(E, Q, Pk, pH, T, samples=100)
+       end = time.time()
+       elapsed = end - start
+       label_3 = "QA model"
+       print(f"{label_3} took {elapsed} seconds")
        
        if arguments.arg_graph_microstates == 'yes':
-           """
+           
            microstate_compare = solver.plot_exact_vs_mc_sampling(energies, weights, mc_sampling_dist, label_2, figsize=(14, 5), bins=100, color = 'tab:green')
            dest = "microstate data outputs"
            sampling_fig_filename = 'Fig_COMPARE_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T) + '_QA_vs_EX.jpg'
            full_path = os.path.join(dest, sampling_fig_filename)
            microstate_compare.savefig(full_path, dpi=300, bbox_inches='tight')
-           microstate_compare.close()"""
+           microstate_compare.close()
            
-           microstate_compare = solver.plot_exact_vs_qa_unique(energies, weights, qa_energies, qa_weights)
+           microstate_compare = solver.plot_exact_vs_qa(energies, weights, qa_energies, qa_weights)
            dest = "microstate data outputs"
            sampling_fig_filename = 'Fig_COMPARE_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T) + '_QA_Unique_vs_EX.jpg'
            full_path = os.path.join(dest, sampling_fig_filename)
@@ -476,7 +487,7 @@ def main():
            int_microstates = sampled_microstates.astype(int)
            np.savetxt('sampled_microstates.csv', int_microstates, delimiter=',')
        plot_data = EX_result
-       plot_data_2 = QA_result
+       plot_data_2 = MC_result
        plot_data_3 = QA_U_result
 
    # Plotting / Saving Results
