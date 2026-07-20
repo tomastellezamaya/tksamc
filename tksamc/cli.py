@@ -74,6 +74,7 @@ def main():
    parser.add_argument('-f', metavar='input-file-PDB',help='insert a PDB file',type=argparse.FileType('rt'))
    parser.add_argument('-e', action='store',choices=['TK'], default="TK",dest='arg_e',type=str,help='Electrostatic energy calculation method')
    parser.add_argument('-s', action='store',choices=['EX','MC','QA','COMPARE'], default="MC",dest='arg_s',type=str,help='Statistical method - EX = Exact; MC = Monte Carlo; COMPARE = run both and compare the differences for testing')
+   parser.add_argument('-m', action = 'store', choices=['yes','no'], default = 'no', dest = 'arg_m', type = str)
    parser.add_argument('-plot', action='store',choices=['yes','no'], default="yes",dest='arg_plot',type=str,help='Save Plot figure file - EPS')
    parser.add_argument('-aref', action='store', choices=['header', 'mdtraj'], default='header', dest='arg_aref', type=str, help='Reference Max SASA set. header=Legacy (Richards), mdtraj=Bondi (Tien 2013). Default: header')
    parser.add_argument('-exact-states-file', action='store', type=str, default=None, dest='arg_exact_states_file', help='Path to save exact microstates (CSV format). Default: None')
@@ -352,6 +353,7 @@ def main():
    sampling_dist = None
 
    if arguments.arg_s == 'EX':
+       label_1 = 'EX_model'
        print(u"\U0001F63A", "### TK - Exact ###", u"\U0001F63A")
        start = time.time()
 
@@ -410,6 +412,7 @@ def main():
        print("Ran in %f sec" % elapsed)
 
    elif arguments.arg_s == 'MC':
+       label_1 = 'MC_model'
        print(u"\U0001F63A", "### TKSA - MC ###", u"\U0001F63A")
        start = time.time()
        G_result, sampling_dist = solver.solve_mc_by_weights(E, Q, Pk, pH, T)
@@ -426,24 +429,34 @@ def main():
            print('Saved sampling distribution plot:', full_path)
        plot_data = G_result
    elif arguments.arg_s == 'QA':
-       print(u"\U0001F63A", "### TK - QA ###", u"\U0001F63A")
-       start = time.time()
-       Gqq_result, sampling_dist = solver.solve_qa(E, Q, Pk, pH, T)
-       plot_data = Gqq_result
-       end = time.time()
-       elapsed = end - start
-       print("Ran in %f sec" % elapsed)
+        label_1 = "QA model"
+        if arguments.arg_m =='no':
+            start = time.time()
+            print(u"\U0001F63A", "### TK - QA ###", u"\U0001F63A")
+            tart = time.time()
+            Gqq_result, QA_energies, QA_weights = solver.solve_qa(E, Q, Pk, pH, T)
+            plot_data = Gqq_result
+            end = time.time()
+            elapsed = end - start
+            print("Ran in %f sec" % elapsed)
 
-       if arguments.arg_graph_microstates == 'yes':
-          dest = "microstate data outputs"
-          sampling_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_sampling_dist.jpg'
-          full_path = os.path.join(dest, sampling_fig_filename)
-          sampling_plt = solver.plot_microstate_counts(sampling_dist, bins=150, color='C0')
-          sampling_plt.savefig(full_path, dpi=300, bbox_inches="tight")
-          sampling_plt.close()
-          print('Saved sampling distribution plot:', full_path)
-          
+        if arguments.arg_graph_microstates == 'yes':
+                dest = "microstate data outputs"
+                sampling_fig_filename = 'Fig_'+arguments.arg_s+'_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'_sampling_dist.jpg'
+                full_path = os.path.join(dest, sampling_fig_filename)
+                sampling_plt = solver.plot_energy_vs_weights(QA_energies, QA_weights)
+                sampling_plt.savefig(full_path, dpi=150, bbox_inches="tight")
+                sampling_plt.close()
+                print('Saved sampling distribution plot:', full_path)
+        if arguments.arg_m =='yes':
+            mult, mult_plot = solver.find_optimal_multiplier(E, Q, Pk, pH, T)
+            print("Optimal multiplier: " +str(mult))
+            mult_plot_filename = 'Fig_'+os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T)+'mult_optimization.jpg'
+            mult_plot.savefig(mult_plot_filename)
+            mult_plot.close()
+
    elif arguments.arg_s == 'COMPARE':
+       
        start = time.time()
        EX_result, energies, weights, per_residue_energy = solver.solve_exact(
                E, Q, Pk, pH, T, return_microstate_energies=True)
@@ -454,6 +467,7 @@ def main():
        if 0.0 in energies:
            count = np.count_nonzero(energies == 0.0)
            print(f"Warning: {count} exact 0.0 energy states found")
+        
 
        start = time.time()
        MC_result, mc_sampling_dist = solver.solve_mc_by_weights(E, Q, Pk, pH, T)
@@ -463,32 +477,31 @@ def main():
        print(f"{label_2} took {elapsed} seconds")
 
        start = time.time()
-       QA_U_result, qa_energies, qa_weights, sampled_microstates = solver.solve_qa(E, Q, Pk, pH, T, samples=100)
+       QA_result, qa_energies, qa_weights = solver.solve_qa(E, Q, Pk, pH, T, mult = None)
        end = time.time()
        elapsed = end - start
        label_3 = "QA model"
        print(f"{label_3} took {elapsed} seconds")
        
        if arguments.arg_graph_microstates == 'yes':
-           
+           """
            microstate_compare = solver.plot_exact_vs_mc_sampling(energies, weights, mc_sampling_dist, label_2, figsize=(14, 5), bins=100, color = 'tab:green')
+           dest = "microstate data outputs"
+           sampling_fig_filename = 'Fig_COMPARE_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T) + '_MC_vs_EX.jpg'
+           full_path = os.path.join(dest, sampling_fig_filename)
+           microstate_compare.savefig(full_path, dpi=300, bbox_inches='tight')
+           microstate_compare.close()"""
+        
+           microstate_compare = solver.plot_ex_vs_qa(energies, weights, qa_energies, qa_weights)
            dest = "microstate data outputs"
            sampling_fig_filename = 'Fig_COMPARE_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T) + '_QA_vs_EX.jpg'
            full_path = os.path.join(dest, sampling_fig_filename)
-           microstate_compare.savefig(full_path, dpi=300, bbox_inches='tight')
+           microstate_compare.savefig(full_path, dpi=150, bbox_inches='tight')
            microstate_compare.close()
            
-           microstate_compare = solver.plot_exact_vs_qa(energies, weights, qa_energies, qa_weights)
-           dest = "microstate data outputs"
-           sampling_fig_filename = 'Fig_COMPARE_'+ os.path.splitext(os.path.basename(file_pdb_name))[0]+'_pH_'+str(pH)+'_T_'+str(T) + '_QA_Unique_vs_EX.jpg'
-           full_path = os.path.join(dest, sampling_fig_filename)
-           microstate_compare.savefig(full_path, dpi=300, bbox_inches='tight')
-           microstate_compare.close()
-           int_microstates = sampled_microstates.astype(int)
-           np.savetxt('sampled_microstates.csv', int_microstates, delimiter=',')
        plot_data = EX_result
        plot_data_2 = MC_result
-       plot_data_3 = QA_U_result
+       plot_data_3 = QA_result
 
    # Plotting / Saving Results
    if arguments.arg_plot == 'yes':
@@ -502,7 +515,7 @@ def main():
 
        # Total dG
        total_dG = np.sum(plot_data)
-       print("Total dG Energy: ", total_dG)
+       print("Total dG Energy of "+label_1+": ", total_dG)
 
        # Color logic (SA is shared, applied to all models)
        colors = []
@@ -528,7 +541,7 @@ def main():
                    colors_2.append('red')
                else:
                    colors_2.append('blue')
-
+           
            colors_3 = []
            for position, value in enumerate(plot_data_3):
                if value > 0 and SA[position] > 0.5:
@@ -546,9 +559,11 @@ def main():
            ax.bar(x_pos, plot_data_2, width=bar_width,
                   color=colors_2, edgecolor='black', linewidth=0.5,
                   label=label_2, alpha=0.85, hatch='//')
+           
            ax.bar(x_pos + bar_width, plot_data_3, width=bar_width,
                   color=colors_3, edgecolor='black', linewidth=0.5,
                   label=label_3, alpha=0.85, hatch='xx')
+                  
 
            ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
 

@@ -171,20 +171,6 @@ def sort_by_weight(energies, weights, per_residue_energy):
     sorted_per_residue_energy = per_residue_energy[sorted_indices]
     return sorted_microstates, sorted_energies, sorted_weights, sorted_per_residue_energy
 
-def error_limit_helper(microstate_weights, microstate_per_residue_energy):
-    """
-    Exact solution for TKSA with a limited state space (annealing helper).
-
-    Args:
-        microstate_per_residue_energy: Pre-computed per-residue energy contribution for each microstate (shape: (num_states, n)).
-        microstate_weights: Pre-computed weights for each microstate (shape: (num_states,)).
-        neither microstate_per_residue_energy nor microstate_weights need to be sorted, but they must correspond to the same microstates.
-    Returns:
-        Gqq: Free energy per residue (N).
-    """
-    G_qq = np.sum(microstate_per_residue_energy * microstate_weights[:, None], axis=0) / np.sum(microstate_weights)
-    return 0.5 * G_qq
-
 @jit(nopython=True)
 def _solve_mc_jit(Eij, charges, pkas, pH, T, steps, equil_steps):
     """
@@ -363,15 +349,6 @@ def solve_mc_by_weights(Eij, charges, pkas, pH, T, steps = 100000, equil_steps =
   G_res = avg_E * (0.0083145 * T) / 5.0
   return G_res, sampling_dist
             
-def encode_microstates(snapshots):
-    bits = (snapshots != 0.0).astype(np.uint8)
-    indices = []
-    for row in bits:
-        packed = np.packbits(row, bitorder='little')
-        idx = int.from_bytes(packed.tobytes(), byteorder='little')
-        indices.append(idx)
-    return indices
-
 def solve_mc(Eij, charges, pkas, pH, T, steps=100000, equil_steps=1000):
     """
     Monte Carlo solution wrapper.
@@ -407,7 +384,7 @@ def plot_mc_sampling_distribution(sampling_dist, bins=150, color='C0'):
     plt.grid(True)
     return plt
 
-def plot_exact_vs_mc_sampling(exact_energies, exact_weights, mc_sampling_dist, mc_type, figsize=(14, 5), bins=150,  color = 'tab:green'):
+def plot_ex_vs_mc(exact_energies, exact_weights, mc_sampling_dist, mc_type, figsize=(14, 5), bins=150,  color = 'tab:green'):
     """Compare exact microstate energies vs MC-sampled microstate energies.
 
     Visualization of how well MC explores the energy landscape.
@@ -441,6 +418,20 @@ def plot_exact_vs_mc_sampling(exact_energies, exact_weights, mc_sampling_dist, m
     plt.title(mc_type+" sampling vs. Exact microstates")
     plt.tight_layout()
     return plt
+
+def error_limit_helper(microstate_weights, microstate_per_residue_energy):
+    """
+    Exact solution for TKSA with a limited state space (annealing helper).
+
+    Args:
+        microstate_per_residue_energy: Pre-computed per-residue energy contribution for each microstate (shape: (num_states, n)).
+        microstate_weights: Pre-computed weights for each microstate (shape: (num_states,)).
+        neither microstate_per_residue_energy nor microstate_weights need to be sorted, but they must correspond to the same microstates.
+    Returns:
+        Gqq: Free energy per residue (N).
+    """
+    G_qq = np.sum(microstate_per_residue_energy * microstate_weights[:, None], axis=0) / np.sum(microstate_weights)
+    return 0.5 * G_qq
 
 def error_limit_exact_microstates(Gqq_full, sorted_weights, sorted_per_residue_energy, rate=0.01):
     """Slowly lower the amount of states considered in the exact solver by applying an annealing-like approach.
@@ -533,72 +524,6 @@ def plot_energy_vs_weights(energies, weights):
     plt.grid(True)
     return plt
 
-def sample_qa(Eij, charges, pkas, pH, T, samples, run_local):
-    """
-    return a set of microstates sampled using quantum annealing that maximize the Boltzmann weight of the system
-
-    Args:
-        Eij: Interaction matrix (NxN).
-        charges: Initial charges (N).
-        pkas: pKa values (N).
-        pH: pH value.
-        T: Temperature.
-        samples: Number of annealing samples.
-    """
-    n = len(charges)
-    ln10 = np.log(10)
-    RT = R * T
-    
-    # Vectorized computation
-    linear_coefficients = ln10*(pH - pkas) + (Eij @ charges) / RT
-    diagonal = np.diag(Eij) / (2 * RT)
-    Eq = Eij @ charges
-    constant = np.dot(charges, Eq) / (2 * RT) - ln10 * np.dot(charges, pkas)
-     
-    linear = {i: linear_coefficients[i] + diagonal[i] for i in range(n)}
-    
-    # Only include non-zero quadratic terms (sparse representation)
-    quadratic = {(i, j): Eij[i, j] / RT 
-                 for i in range(n) for j in range(i + 1, n) 
-                 if Eij[i, j] != 0}
-    
-    bqm = dimod.BinaryQuadraticModel(linear, quadratic, constant, 'BINARY')
-    if run_local:
-        sampler = dimod.SimulatedAnnealingSampler()
-        sampleset = sampler.sample(bqm, num_reads=samples, num_sweeps = 100)
-    else:
-        sampler = EmbeddingComposite(DWaveSampler())
-        sampleset = sampler.sample(bqm, num_reads=samples)
-    microstates = np.array([np.array(list(sample[0]), dtype=np.float64) 
-                           for sample in sampleset.record], dtype=np.float64)
-    weights = np.array([sample[1] for sample in sampleset.record], dtype=np.float64)
-    return microstates, weights
-
-@jit(nopython=True)
-def _solve_qa_jit(Eij, charges, microstates, n_samples):
-    """
-    JIT-compiled loop for processing quantum annealing samples.
-    
-    Args:
-        Eij: Interaction matrix (NxN).
-        charges: Initial charges (N).
-        microstates: Array of sampled microstates (n_samples, N).
-        n_samples: Number of samples.
-    
-    Returns:
-        Gqq_total: Accumulated per-residue energies (N).
-    """
-    n = len(charges)
-    Gqq_total = np.zeros(n, dtype=np.float64)
-    
-    for i in range(n_samples):
-        microstate = microstates[i, :]
-        Q = charges + microstate
-        Eq = Eij @ Q
-        Gqq_total += 0.0005 * Q * Eq
-    Gqq_avg = Gqq_total / n_samples
-    return Gqq_avg
-
 def weights_to_energies(microstates, weights, pH, T):
     """
     Convert Boltzmann weights to energies for sampled microstates.
@@ -609,42 +534,66 @@ def weights_to_energies(microstates, weights, pH, T):
         pH: pH value.
         T: Temperature.
         """
-    n = len(weights)
     RT = R * T
-    energies = np.zeros(n, dtype=np.float64)
     ln10 = np.log(10)
-    for i in range(n):
-        microstate = microstates[i, :]
-        energies[i] = -RT * (np.log(weights[i]) + ln10 * pH * np.sum(microstate))
-    return energies
+    return -RT * (np.log(weights) + ln10 * pH * np.sum(microstates, axis=1))
 
-def solve_qa(Eij, charges, pkas, pH, T, samples=1, run_local=True):
+def build_bqm(Eij, charges, pkas, pH, T):
     """
-    Solve TKSA using quantum annealing and return the average per-residue energies.
-
-    Args:
-        Eij: Interaction matrix (NxN).
-        charges: Initial charges (N).
-        pkas: pKa values (N).
-        pH: pH value.
-        T: Temperature.
-        samples: Number of annealing samples.
-        run_local: Whether to run the quantum annealing locally.
-    Returns:
-        Gqq_avg: Average per-residue energies (N).
-        sampling_dist: The list containing the sampled state energies.
-        sampleset: The sampleset containing the quantum annealing results.
+    Builds the bqm for sampling
     """
-    microstates, weights = sample_qa(Eij, charges, pkas, pH, T, samples, run_local)
     n = len(charges)
-    
-    # Call JIT-compiled function
-    Gqq_avg = _solve_qa_jit(Eij, charges, microstates, samples)
-    # Turn the sampleset data into the energies of the sampled states for comparison
-    sampling_dist = weights_to_energies(microstates, weights, pH, T)
-    return Gqq_avg/2, sampling_dist
+    ln10 = np.log(10)
+    RT = R * T
+    Eq = Eij @ charges
 
-def sample_unique(Eij, charges, pkas, pH, T, samples, run_local):
+    # Vectorized computation
+    linear_coefficients = ln10*(pH - pkas) + (Eq) / RT
+    diagonal = np.diag(Eij) / (2 * RT)
+    
+    constant = np.dot(charges, Eq) / (2 * RT) - ln10 * np.dot(charges, pkas)
+     
+    linear = dict(enumerate(linear_coefficients + diagonal))
+    
+    # Only include non-zero quadratic terms (sparse representation)
+    iu, ju = np.triu_indices(n, k=1)
+    vals = Eij[iu, ju]
+    mask = vals !=0
+    quadratic = dict(zip(zip(iu[mask].tolist(), ju[mask].tolist()),
+                          (vals[mask] / RT).tolist()))
+    
+    bqm = dimod.BinaryQuadraticModel(linear, quadratic, constant, 'BINARY')
+    return bqm
+
+def get_e_diff(bqm, n):
+    sampler = sampler = dimod.SimulatedAnnealingSampler()
+    initial_sample = sampler.sample(bqm, num_reads=5, num_sweeps=100)
+    best = initial_sample.first    
+    rand_samples = np.random.randint(0, 2, size=(1000, n))
+    sample_like = (rand_samples, list(bqm.variables))
+    rand_energy_avg = np.average(bqm.energies(sample_like))
+    e_diff = rand_energy_avg - best.energy
+    return e_diff, best
+
+def single_bit_flip(X):
+    """
+    Given an (m, n) array of binary vectors, return a deduplicated
+    array containing each original vector and its n single-bit-flip
+    neighbors.
+    """
+    Xi = X.astype(np.int64)
+
+    m, n = Xi.shape
+    flip_mask = np.eye(n, dtype=np.int64)
+    flipped = Xi[:, None, :] ^ flip_mask[None, :, :]
+    flipped = flipped.reshape(m * n, n)
+
+    combined = np.vstack([Xi, flipped])
+    result = np.unique(combined, axis=0)
+
+    return result.astype(np.float64) 
+
+def sample_qa(Eij, charges, pkas, pH, T, mult):
     """
     return a set of unique microstates that maximize the boltzmann weight of the system using quantum annealing.
 
@@ -657,48 +606,64 @@ def sample_unique(Eij, charges, pkas, pH, T, samples, run_local):
         samples: Number of annealing samples.
     """
     n = len(charges)
-    ln10 = np.log(10)
-    RT = R * T
-    microstates = np.zeros((samples, n), dtype=np.float64)
-    weights = np.zeros(samples, dtype=np.float64)
+    variables = range(n)
+    microstates = []
+    samples = n*20
+    oversample = 2
+    oversample_growth = 1.7
+    max_batches = 10
 
-    # Vectorized computation
-    linear_coefficients = ln10*(pH - pkas) + (Eij @ charges) / RT
-    diagonal = np.diag(Eij) / (2 * RT)
-    Eq = Eij @ charges
-    constant = np.dot(charges, Eq) / (2 * RT) - ln10 * np.dot(charges, pkas)
-     
-    linear = {i: linear_coefficients[i] + diagonal[i] for i in range(n)}
-    
-    # Only include non-zero quadratic terms (sparse representation)
-    quadratic = {(i, j): Eij[i, j] / RT 
-                 for i in range(n) for j in range(i + 1, n) 
-                 if Eij[i, j] != 0}
-    
-    base_bqm = dimod.BinaryQuadraticModel(linear, quadratic, constant, 'BINARY')
+    bqm = build_bqm(Eij, charges, pkas, pH, T)
     sampler = dimod.SimulatedAnnealingSampler()
     seen_states = set()
-    for i in range(samples):
-        penalty_bqm = base_bqm.copy()
-        # Add penalty for already seen states
-        penalty = 100.0
-        terms = {}
-        for state in seen_states:
-            for j, bit in enumerate(state):
-                terms[j] = penalty*(1-2*bit)
-            penalty_bqm.add_linear_from(terms)
-            penalty_bqm.add_offset(penalty*(n-sum(state)))
-        sampleset = sampler.sample(penalty_bqm, num_reads=1, num_sweeps=10)
-        sample = sampleset.first.sample
-        microstate = np.array([sample[i] for i in range(n)], dtype=np.float64)
-        if tuple(microstate) in seen_states:
-            continue
-        seen_states.add(tuple(microstate))
-        microstates[i] = microstate
-        weights[i] = np.exp(-(sampleset.first.energy))
-    return microstates, weights
 
-def solve_qa_unique(Eij, charges, pkas, pH, T, samples=100, run_local=True):
+    # calculating possible lagrange multplier value 
+    # taking the difference between the energy of a random state (most likely very high energy/low weight)
+    # and the best possible state
+    
+    e_diff, best = get_e_diff(bqm, n)
+
+    lagrange = e_diff*mult   
+    # adding the best state to seen
+    best_state = np.array([best.sample[i] for i in range(n)], dtype=np.float64)
+    seen_states.add(tuple(best_state))
+    microstates.append(best_state)
+
+    # adding new constraint to avoid sampling the best state again
+    
+    terms = [(var, 1-2*best_state[var]) for var in variables]
+    bqm.add_linear_inequality_constraint(
+        terms,
+        lb = 1-np.sum(best_state),
+        lagrange_multiplier = lagrange,
+        label = "penalty_1"            
+    )
+
+    sampleset = sampler.sample(bqm, num_reads=samples, num_sweeps=10).aggregate()
+    recs = sampleset.record
+    num_unique = len(sampleset)
+    print("Found "+str(num_unique)+"/"+str(samples)+" unique samples")
+    # filtering out the slack variables from adding constraint
+    # column_idxs is a list of the indeces in the raw variables data that contains the original vaiables so we can access only the ones we care about
+    raw_variables = sampleset.variables
+    column_idxs = [raw_variables.index(var) for var in variables]
+    
+    for rec in recs:
+        state = rec.sample[column_idxs]
+        key = tuple(state.tolist())
+        if key in seen_states:
+            continue
+        seen_states.add(key)
+        microstates.append(state.astype(np.float64))
+        if len(microstates) == samples:
+            break
+    expanded_states = single_bit_flip(np.array(microstates))
+    print("Used "+str(len(expanded_states))+" total states after expansion")
+              
+    #return np.asarray(microstates), np.asarray(weights)
+    return expanded_states
+   
+def solve_qa(Eij, charges, pkas, pH, T, mult=None):
     """
     Solve TKSA using quantum annealing and return the average per-residue energies from unique sampled states.
 
@@ -711,32 +676,76 @@ def solve_qa_unique(Eij, charges, pkas, pH, T, samples=100, run_local=True):
         samples: Number of annealing samples.
         run_local: Whether to run the quantum annealing locally.
         """
-    microstates, weights = sample_unique(Eij, charges, pkas, pH, T, samples, run_local)
     n = len(charges)
-    approx_Zn = np.sum(weights)
+    if mult == None:
+        mult = 1e-1
+    microstates = sample_qa(Eij, charges, pkas, pH, T, mult)
+    
     Q = charges + microstates
-    PE = Q @ Eij
-    interaction_energy_per_res = 0.0005 * Q * PE
-    #column_w = weights[:, np.newaxis]
+    QE = Q @ Eij
+    QQE = Q*QE
+    RT = R * T
+    ln10RT = np.log(10) * RT
+    ln10pH = np.log(10)*pH
+    Term1 = np.sum(pkas * Q, axis=1)
+    Term2 = 0.5 * np.sum(QQE, axis=1)
+    Gn = -Term1 * ln10RT + Term2
+    vi = np.sum(microstates, axis=1)
+    Term3 = vi * ln10pH
+    interaction_energy_per_res = 0.0005 * QQE
+    weights = np.exp(-Gn/RT - Term3)
+    approx_Zn = np.sum(weights)
     Gqq_avg = np.sum(interaction_energy_per_res * weights[:, None], axis=0) / approx_Zn
     energies = weights_to_energies(microstates, weights, pH, T)
-    return Gqq_avg, energies, weights, microstates
+    return Gqq_avg/2, energies, weights
+    #return Gqq_avg/2
 
-def plot_exact_vs_qa_unique(ex_energies, ex_weights, qa_energies, qa_weights):
-    """Plot the the sampling of the qa_unique method vs the actual distribution.
-    
-    Args:
-        ex_energies: Array of exact energies.
-        ex_weights: Array of exact Boltzmann weights.
-        qa_energies: Array of sampled energies.
-        qa_weights: Array of sampled Boltzmann weights.
-    """
+def plot_mc_vs_qa(mc_sampling, qa_energies, qa_weights):
     import matplotlib.pyplot as plt
-    plt.figure(figsize=(10, 6)) 
-    plt.scatter(ex_energies, ex_weights, color='blue', label='Exact Distribution')
-    plt.scatter(qa_energies, qa_weights, color='red', label='QA Unique Sampling')
-    plt.xlabel('Energy')
-    plt.ylabel('Boltzmann Weight')
-    plt.title('Exact vs QA Unique Sampling Distribution')
-    plt.legend()
+
+    fig, ax1 = plt.subplots(figsize=(14, 5))
+    ax2 = ax1.twinx()
+
+    # Left: MC sampling histogram
+    ax1.set_xlabel('Energy of States')
+    ax1.set_ylabel('Count of times sampled by MC', color='darkblue')
+    ax1.hist(mc_sampling, bins=150, color='blue', edgecolor='black', alpha=0.7)
+    ax1.tick_params(axis='y', labelcolor='blue')
+
+    # Right: QA unique samples as a scatter
+    color_scatter = 'tab:red'
+    ax2.set_ylabel('QA Boltzmann weight', color=color_scatter)
+    ax2.scatter(qa_energies, qa_weights, color=color_scatter, linewidth=2.5, zorder=3)
+    ax2.tick_params(axis='y', labelcolor=color_scatter)
+
+    plt.title('MC sampling vs. QA Sampling')
+    plt.tight_layout()
     return plt
+
+def plot_ex_vs_qa(ex_energies, ex_weights, qa_energies,  qa_weights):
+    import matplotlib.pyplot as plt
+    plt.figure(figsize = (14,5))
+    plt.scatter(ex_energies, ex_weights, color = 'blue', linewidth = 2.5, label = 'EX model')
+    plt.scatter(qa_energies, qa_weights, color = 'red', linewidth = 2.5, label = 'QA model')
+    plt.title("EX vs QA model sampling")
+    plt.xlabel("Energy")
+    plt.ylabel("Weight")
+    plt.legend()
+    plt.grid(True)
+    return plt
+
+def find_optimal_multiplier(Eij, charges, pkas, pH, T):
+    import matplotlib.pyplot as plt
+    mc, _ = solve_mc_by_weights(Eij, charges, pkas, pH, T, steps = 100000, equil_steps = 1000)
+    errors = []
+    mults = np.linspace(0, .05, 101)
+    for mult in mults:
+        qa = solve_qa(Eij, charges, pkas, pH, T, mult, run_local=True)
+        errors.append(np.linalg.norm(mc-qa))
+    plt.figure(figsize=(10, 6))
+    plt.scatter(mults, errors, alpha=0.6)
+    plt.xlabel('E_diff multiplier value')
+    plt.ylabel('MC vs QA error')
+    plt.title('Multiplier Value vs Error')
+    plt.grid(True)
+    return mults[np.argmin(errors)], plt
