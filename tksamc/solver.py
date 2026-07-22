@@ -621,9 +621,9 @@ def sample_qa(Eij, charges, pkas, pH, T, mult):
     # taking the difference between the energy of a random state (most likely very high energy/low weight)
     # and the best possible state
     
-    e_diff, best = get_e_diff(bqm, n)
+    _, best = get_e_diff(bqm, n)
 
-    lagrange = e_diff*mult   
+    lagrange = mult   
     # adding the best state to seen
     best_state = np.array([best.sample[i] for i in range(n)], dtype=np.float64)
     seen_states.add(tuple(best_state))
@@ -639,7 +639,7 @@ def sample_qa(Eij, charges, pkas, pH, T, mult):
         label = "penalty_1"            
     )
 
-    sampleset = sampler.sample(bqm, num_reads=samples, num_sweeps=10).aggregate()
+    sampleset = sampler.sample(bqm, num_reads=500, num_sweeps=10).aggregate()
     recs = sampleset.record
     num_unique = len(sampleset)
     print("Found "+str(num_unique)+"/"+str(samples)+" unique samples")
@@ -678,7 +678,8 @@ def solve_qa(Eij, charges, pkas, pH, T, mult=None):
         """
     n = len(charges)
     if mult == None:
-        mult = 1e-1
+        #mult = 6 good for PLC and below??? n = 25 ish
+        mult = 1.5
     microstates = sample_qa(Eij, charges, pkas, pH, T, mult)
     
     Q = charges + microstates
@@ -738,9 +739,9 @@ def find_optimal_multiplier(Eij, charges, pkas, pH, T):
     import matplotlib.pyplot as plt
     mc, _ = solve_mc_by_weights(Eij, charges, pkas, pH, T, steps = 100000, equil_steps = 1000)
     errors = []
-    mults = np.linspace(0, .05, 101)
+    mults = np.linspace(0, 3, 11)
     for mult in mults:
-        qa = solve_qa(Eij, charges, pkas, pH, T, mult, run_local=True)
+        qa,_,_ = solve_qa(Eij, charges, pkas, pH, T, mult)
         errors.append(np.linalg.norm(mc-qa))
     plt.figure(figsize=(10, 6))
     plt.scatter(mults, errors, alpha=0.6)
